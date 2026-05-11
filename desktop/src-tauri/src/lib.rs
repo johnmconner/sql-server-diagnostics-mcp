@@ -1,4 +1,7 @@
+mod credential_store;
+
 use anyhow::{anyhow, Context, Result};
+use credential_store::{sql_password_status, write_password, CredentialStatus};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -72,6 +75,7 @@ struct ProfileSummary {
     default_database: Option<String>,
     databases: Vec<String>,
     auth_mode: String,
+    credential_status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +168,7 @@ struct ProfileDefinition {
     auth_mode: Option<String>,
     username: Option<String>,
     password: Option<String>,
+    credential_ref: Option<String>,
     database: Option<String>,
     databases: Option<Vec<String>>,
     driver: Option<String>,
@@ -176,15 +181,17 @@ struct ProfileDefinition {
 }
 
 impl ProfileDefinition {
-    fn summary(&self) -> ProfileSummary {
-        ProfileSummary {
+    fn summary(&self) -> Result<ProfileSummary> {
+        self.validate()?;
+        Ok(ProfileSummary {
             id: self.id.clone(),
             label: self.label.clone().unwrap_or_else(|| self.id.clone()),
             host: self.host.clone(),
             default_database: self.database.clone(),
             databases: self.database_list(),
-            auth_mode: self.auth_mode.clone().unwrap_or_else(|| "sql".to_string()),
-        }
+            auth_mode: self.normalized_auth_mode(),
+            credential_status: self.credential_status().as_str().to_string(),
+        })
     }
 
     fn database_list(&self) -> Vec<String> {
@@ -198,6 +205,91 @@ impl ProfileDefinition {
             databases.push("master".to_string());
         }
         databases
+    }
+
+    fn normalized_auth_mode(&self) -> String {
+        self.auth_mode
+            .clone()
+            .unwrap_or_else(|| "sql".to_string())
+            .trim()
+            .to_ascii_lowercase()
+    }
+
+    fn trimmed_username(&self) -> Option<&str> {
+        self.username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn trimmed_credential_ref(&self) -> Option<&str> {
+        self.credential_ref
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn credential_status(&self) -> CredentialStatus {
+        if self.normalized_auth_mode() != "sql" {
+            return CredentialStatus::NotRequired;
+        }
+        sql_password_status(self.trimmed_credential_ref())
+    }
+
+    fn validate(&self) -> Result<()> {
+        let auth_mode = self.normalized_auth_mode();
+        if auth_mode != "sql" && auth_mode != "windows" {
+            return Err(anyhow!(
+                "Profile '{}' must use authMode 'sql' or 'windows'.",
+                self.id
+            ));
+        }
+
+        if let Some(password) = &self.password {
+            if !password.trim().is_empty() {
+                return Err(anyhow!(
+                    "Profile '{}' cannot define 'password'; use 'credentialRef' and Windows Credential Manager instead.",
+                    self.id
+                ));
+            }
+        }
+
+        if auth_mode == "sql" {
+            if self.trimmed_username().is_none() {
+                return Err(anyhow!(
+                    "Profile '{}' must define 'username' for SQL authentication.",
+                    self.id
+                ));
+            }
+            if self.trimmed_credential_ref().is_none() {
+                return Err(anyhow!(
+                    "Profile '{}' must define 'credentialRef' for SQL authentication.",
+                    self.id
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_connectable(&self) -> Result<()> {
+        self.validate()?;
+        if self.normalized_auth_mode() != "sql" {
+            return Ok(());
+        }
+
+        match self.credential_status() {
+            CredentialStatus::Ready => Ok(()),
+            CredentialStatus::Missing => Err(anyhow!(
+                "Stored credential for profile '{}' is missing. Save it to Windows Credential Manager and try again.",
+                self.id
+            )),
+            CredentialStatus::Unsupported => Err(anyhow!(
+                "Profile '{}' uses credentialRef, which is only supported on Windows.",
+                self.id
+            )),
+            CredentialStatus::NotRequired => Ok(()),
+        }
     }
 }
 
@@ -435,6 +527,9 @@ async fn open_target_tab(
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .ok_or_else(|| format!("Unknown profile '{profile_id}'."))?;
+    profile
+        .ensure_connectable()
+        .map_err(|error| error.to_string())?;
 
     let chosen_database = if database.trim().is_empty() {
         profile
@@ -509,7 +604,10 @@ async fn open_target_tab(
         rpc: rpc.clone(),
         process: Mutex::new(Some(child)),
         pending_requests: Mutex::new(HashMap::new()),
-        mcp_log_path: resolve_mcp_log_path(&state.config.workspace_root, profile.log_path.as_deref()),
+        mcp_log_path: resolve_mcp_log_path(
+            &state.config.workspace_root,
+            profile.log_path.as_deref(),
+        ),
     });
 
     state
@@ -574,6 +672,44 @@ async fn open_target_tab(
 
     let snapshot = session.snapshot.read().await.clone();
     Ok(snapshot)
+}
+
+#[tauri::command]
+async fn save_profile_credential(
+    profile_id: String,
+    password: String,
+    state: State<'_, DesktopState>,
+) -> std::result::Result<BootstrapPayload, String> {
+    let trimmed_password = password.trim();
+    if trimmed_password.is_empty() {
+        return Err("Password cannot be empty.".to_string());
+    }
+
+    let profile_file = state.current_profile_file().await;
+    let profiles = load_or_create_profiles(&profile_file).map_err(|error| error.to_string())?;
+    let profile = profiles
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("Unknown profile '{profile_id}'."))?;
+    profile.validate().map_err(|error| error.to_string())?;
+
+    if profile.normalized_auth_mode() != "sql" {
+        return Err(format!(
+            "Profile '{}' does not use SQL authentication.",
+            profile.id
+        ));
+    }
+
+    let username = profile
+        .trimmed_username()
+        .ok_or_else(|| format!("Profile '{}' must define 'username'.", profile.id))?;
+    let credential_ref = profile
+        .trimmed_credential_ref()
+        .ok_or_else(|| format!("Profile '{}' must define 'credentialRef'.", profile.id))?;
+
+    write_password(credential_ref, username, trimmed_password)
+        .map_err(|error| error.to_string())?;
+    build_bootstrap_payload(&state).await
 }
 
 #[tauri::command]
@@ -740,15 +876,9 @@ async fn clear_target_conversation(
         .find(|profile| profile.id == snapshot.profile_id)
         .ok_or_else(|| format!("Unknown profile '{}'.", snapshot.profile_id))?;
 
-    let thread_id = restore_or_start_thread(
-        &state,
-        &session,
-        &profile,
-        &snapshot.database,
-        None,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    let thread_id = restore_or_start_thread(&state, &session, &profile, &snapshot.database, None)
+        .await
+        .map_err(|error| error.to_string())?;
 
     {
         let mut session_snapshot = session.snapshot.write().await;
@@ -871,10 +1001,7 @@ async fn respond_to_approval(
                 respond_with_standard_decision(&session, pending.id, action).await?;
             }
             _ => {
-                return Err(format!(
-                    "Unsupported approval method '{}'.",
-                    pending.method
-                ));
+                return Err(format!("Unsupported approval method '{}'.", pending.method));
             }
         },
     }
@@ -995,6 +1122,11 @@ fn load_profiles(path: &Path) -> Result<Vec<ProfileDefinition>> {
             path.display()
         ));
     }
+    for profile in &parsed.profiles {
+        profile
+            .validate()
+            .with_context(|| format!("Profile file '{}' is invalid.", path.display()))?;
+    }
     Ok(parsed.profiles)
 }
 
@@ -1040,7 +1172,7 @@ fn placeholder_profile_json(seed: Option<&str>) -> Vec<u8> {
                 "port": 1433,
                 "authMode": "sql",
                 "username": "readonly_user",
-                "password": "change-me",
+                "credentialRef": "sample-sql",
                 "database": "master",
                 "databases": ["master"],
                 "driver": "ODBC Driver 18 for SQL Server",
@@ -1125,7 +1257,8 @@ async fn build_bootstrap_payload(
             loaded
                 .into_iter()
                 .map(|profile| profile.summary())
-                .collect::<Vec<_>>(),
+                .collect::<Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?,
             None,
         ),
         Err(error) => (Vec::new(), Some(error.to_string())),
@@ -1806,9 +1939,7 @@ async fn handle_server_notification(session: &Arc<TabSession>, message: &Value) 
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
                 let status_changed = previous_status != next_status;
-                let status_label = next_status
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
+                let status_label = next_status.clone().unwrap_or_else(|| "unknown".to_string());
                 drop(snapshot);
 
                 if status_changed || error_text.is_some() {
@@ -2120,14 +2251,15 @@ pub fn run() {
             bootstrap_app,
             set_profile_file,
             pick_profile_file,
-        open_target_tab,
-        get_tab_snapshot,
-        send_prompt,
-        interrupt_turn,
-        clear_target_conversation,
-        respond_to_approval,
-        close_target_tab,
-    ])
+            open_target_tab,
+            save_profile_credential,
+            get_tab_snapshot,
+            send_prompt,
+            interrupt_turn,
+            clear_target_conversation,
+            respond_to_approval,
+            close_target_tab,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running sql-tshooter desktop");
 }

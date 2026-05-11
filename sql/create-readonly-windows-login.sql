@@ -49,7 +49,7 @@ DECLARE @GrantServerPermissionSql nvarchar(max) =
             AND p.permission_name = ' + QUOTENAME(@ServerPermission, '''') + N'
       )
       BEGIN
-          GRANT ' + QUOTENAME(@ServerPermission) + N' TO ' + QUOTENAME(@WindowsPrincipal) + N';
+          GRANT ' + @ServerPermission + N' TO ' + QUOTENAME(@WindowsPrincipal) + N';
       END;';
 EXEC(@GrantServerPermissionSql);
 
@@ -62,6 +62,10 @@ AND EXISTS (
 BEGIN
     DECLARE @GrantMsdbSql nvarchar(max) =
         N'USE [msdb];
+          IF USER_ID(' + QUOTENAME(@WindowsPrincipal, '''') + N') IS NULL
+          BEGIN
+              CREATE USER ' + QUOTENAME(@WindowsPrincipal) + N' FOR LOGIN ' + QUOTENAME(@WindowsPrincipal) + N';
+          END;
           IF EXISTS (
               SELECT 1
               FROM sys.database_principals

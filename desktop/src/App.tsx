@@ -8,6 +8,7 @@ import {
   openTargetTab,
   pickProfileFile,
   respondToApproval,
+  saveProfileCredential,
   sendPrompt,
   setProfileFile,
 } from "./lib/api";
@@ -330,13 +331,47 @@ export default function App() {
     }
 
     setBusy(true);
+    setBootError(null);
     try {
+      if (selectedProfile?.authMode === "sql" && selectedProfile.credentialStatus === "missing") {
+        const password = window.prompt(`Enter the SQL password for ${selectedProfile.label}.`);
+        if (password === null) {
+          return;
+        }
+        const payload = await saveProfileCredential(selectedProfile.id, password);
+        applyPayload(payload, false);
+      }
+
       const snapshot = await openTargetTab(selectedProfileId, selectedDatabase);
       setTabs((current) => ({ ...current, [snapshot.id]: snapshot }));
       setTabOrder((current) =>
         current.includes(snapshot.id) ? current : [...current, snapshot.id],
       );
       setActiveTabId(snapshot.id);
+    } catch (error) {
+      setBootError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveCredential() {
+    if (!selectedProfile || selectedProfile.authMode !== "sql") {
+      return;
+    }
+
+    const password = window.prompt(`Enter the SQL password for ${selectedProfile.label}.`);
+    if (password === null) {
+      return;
+    }
+
+    setBusy(true);
+    setBootError(null);
+    try {
+      const payload = await saveProfileCredential(selectedProfile.id, password);
+      applyPayload(payload, false);
+    } catch (error) {
+      setBootError(String(error));
     } finally {
       setBusy(false);
     }
@@ -488,12 +523,19 @@ export default function App() {
           <button className="control-button" disabled={busy || !selectedProfile} onClick={handleConnect}>
             {busy ? "Working..." : "Connect"}
           </button>
+          {selectedProfile?.authMode === "sql" ? (
+            <button className="control-button" disabled={busy} onClick={handleSaveCredential}>
+              {selectedProfile.credentialStatus === "ready" ? "Update Credential" : "Save Credential"}
+            </button>
+          ) : null}
         </div>
 
         <div className="topbar-status">
           {activeTab
             ? `${activeTab.profileLabel}/${activeTab.database} - ${activeTab.codexStatus}`
-            : "No active session"}
+            : selectedProfile?.authMode === "sql"
+              ? `Credential: ${selectedProfile.credentialStatus}`
+              : "No active session"}
         </div>
       </header>
 

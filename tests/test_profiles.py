@@ -41,7 +41,7 @@ def test_load_profile_returns_settings_ready_profile(tmp_path) -> None:
                         "port": 1444,
                         "authMode": "sql",
                         "username": "readonly",
-                        "password": "secret",
+                        "credentialRef": "prod-sql",
                         "database": "AppDb",
                         "databases": ["AppDb", "ReportingDb"],
                         "encrypt": True,
@@ -54,11 +54,14 @@ def test_load_profile_returns_settings_ready_profile(tmp_path) -> None:
     )
 
     profile = load_profile("prod", profile_path)
-    settings = profile.resolve_settings()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("sql_tshooter.profiles.read_password", lambda credential_ref: "secret")
+        settings = profile.resolve_settings()
 
     assert profile.profile_id == "prod"
     assert profile.label == "Production"
     assert profile.databases == ("AppDb", "ReportingDb")
+    assert profile.credential_ref == "prod-sql"
     assert settings.host == "prod-sql-01"
     assert settings.port == 1444
     assert settings.database == "AppDb"
@@ -118,3 +121,48 @@ def test_load_profile_requires_existing_profile_id(tmp_path) -> None:
 
     with pytest.raises(ConfigurationError, match="non-empty 'profiles' array"):
         load_profile("missing", profile_path)
+
+
+def test_load_profile_rejects_plaintext_password(tmp_path) -> None:
+    profile_path = tmp_path / "profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "prod",
+                        "host": "prod-sql-01",
+                        "authMode": "sql",
+                        "username": "readonly",
+                        "password": "secret",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="cannot define 'password'"):
+        load_profile("prod", profile_path)
+
+
+def test_load_profile_requires_credential_ref_for_sql_auth(tmp_path) -> None:
+    profile_path = tmp_path / "profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "prod",
+                        "host": "prod-sql-01",
+                        "authMode": "sql",
+                        "username": "readonly",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="must define 'credentialRef'"):
+        load_profile("prod", profile_path)

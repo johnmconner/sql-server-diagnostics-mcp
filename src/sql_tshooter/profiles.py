@@ -10,6 +10,7 @@ from typing import Any
 
 from sql_tshooter.config import Settings
 from sql_tshooter.errors import ConfigurationError
+from sql_tshooter.secret_store import read_password
 
 
 DEFAULT_PROFILES_FILENAME = "profiles.json"
@@ -23,7 +24,7 @@ class SqlTargetProfile:
     port: int
     auth_mode: str
     username: str | None
-    password: str | None
+    credential_ref: str | None
     default_database: str | None
     databases: tuple[str, ...]
     driver: str
@@ -46,7 +47,7 @@ class SqlTargetProfile:
             database=selected_database,
             auth_mode=self.auth_mode,
             username=self.username,
-            password=self.password,
+            password=_resolve_profile_password(self),
             driver=self.driver,
             encrypt=self.encrypt,
             trust_server_certificate=self.trust_server_certificate,
@@ -117,15 +118,23 @@ def _load_payload(profile_path: Path) -> dict[str, Any]:
 
 
 def _parse_profile(entry: dict[str, Any], profile_path: Path) -> SqlTargetProfile:
-    settings = Settings.from_env(_build_profile_env(entry, profile_path))
+    settings = Settings.from_env(
+        _build_profile_env(entry, profile_path),
+        allow_missing_sql_password=True,
+    )
     profile_id = _require_string(entry, "id", profile_path)
     label = str(entry.get("label", "")).strip() or profile_id
     default_database = _optional_string(entry, "database")
+    credential_ref = _optional_string(entry, "credentialRef")
     configured_databases = _parse_database_list(entry, profile_path)
     if default_database and configured_databases and default_database not in configured_databases:
         raise ConfigurationError(
             f"Profile '{profile_id}' in '{profile_path}' defines database '{default_database}' "
             "that is not present in 'databases'."
+        )
+    if settings.auth_mode == "sql" and not credential_ref:
+        raise ConfigurationError(
+            f"Profile '{profile_id}' in '{profile_path}' must define 'credentialRef' for SQL authentication."
         )
 
     return SqlTargetProfile(
@@ -135,7 +144,7 @@ def _parse_profile(entry: dict[str, Any], profile_path: Path) -> SqlTargetProfil
         port=settings.port,
         auth_mode=settings.auth_mode,
         username=settings.username,
-        password=settings.password,
+        credential_ref=credential_ref,
         default_database=default_database,
         databases=configured_databases,
         driver=settings.driver,
@@ -150,6 +159,11 @@ def _parse_profile(entry: dict[str, Any], profile_path: Path) -> SqlTargetProfil
 
 def _build_profile_env(entry: dict[str, Any], profile_path: Path) -> dict[str, str]:
     auth_mode = _optional_string(entry, "authMode") or "sql"
+    if "password" in entry and str(entry["password"]).strip():
+        profile_id = str(entry.get("id", "<unknown>")).strip() or "<unknown>"
+        raise ConfigurationError(
+            f"Profile '{profile_id}' in '{profile_path}' cannot define 'password'; use 'credentialRef' and Windows Credential Manager instead."
+        )
     values = {
         "SQL_TSHOOTER_HOST": _require_string(entry, "host", profile_path),
         "SQL_TSHOOTER_AUTH_MODE": auth_mode,
@@ -160,8 +174,6 @@ def _build_profile_env(entry: dict[str, Any], profile_path: Path) -> dict[str, s
         values["SQL_TSHOOTER_DATABASE"] = str(entry["database"]).strip()
     if "username" in entry and str(entry["username"]).strip():
         values["SQL_TSHOOTER_USERNAME"] = str(entry["username"]).strip()
-    if "password" in entry and str(entry["password"]).strip():
-        values["SQL_TSHOOTER_PASSWORD"] = str(entry["password"]).strip()
     if "driver" in entry and str(entry["driver"]).strip():
         values["SQL_TSHOOTER_DRIVER"] = str(entry["driver"]).strip()
     if "encrypt" in entry:
@@ -189,6 +201,16 @@ def _build_profile_env(entry: dict[str, Any], profile_path: Path) -> dict[str, s
             "maxLoggedToolOutputChars",
         )
     return values
+
+
+def _resolve_profile_password(profile: SqlTargetProfile) -> str | None:
+    if profile.auth_mode != "sql":
+        return None
+    if not profile.credential_ref:
+        raise ConfigurationError(
+            f"Profile '{profile.profile_id}' must define 'credentialRef' for SQL authentication."
+        )
+    return read_password(profile.credential_ref)
 
 
 def _parse_database_list(entry: dict[str, Any], profile_path: Path) -> tuple[str, ...]:

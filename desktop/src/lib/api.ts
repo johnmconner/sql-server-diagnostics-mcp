@@ -25,6 +25,13 @@ export async function openTargetTab(
   return invoke<TabSnapshot>("open_target_tab", { profileId, database });
 }
 
+export async function saveProfileCredential(
+  profileId: string,
+  password: string,
+): Promise<BootstrapPayload> {
+  return invoke<BootstrapPayload>("save_profile_credential", { profileId, password });
+}
+
 export async function getTabSnapshot(tabId: string): Promise<TabSnapshot> {
   return invoke<TabSnapshot>("get_tab_snapshot", { tabId });
 }

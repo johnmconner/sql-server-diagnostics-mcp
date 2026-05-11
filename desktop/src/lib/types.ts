@@ -5,6 +5,7 @@ export type ProfileSummary = {
   defaultDatabase: string | null;
   databases: string[];
   authMode: string;
+  credentialStatus: "notRequired" | "ready" | "missing" | "unsupported";
 };
 
 export type RestoredTarget = {

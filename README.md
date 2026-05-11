@@ -99,7 +99,9 @@ Set these environment variables before starting the server:
 
 See [.env.example](/C:/Projects/sql-tshooter/.env.example) for a template.
 
-For multi-target launches through Codex, you can define named profiles in a JSON file. The repo now includes a local starter file at [profiles.json](/Users/jconner/projects/sql-tshoot-mcp/profiles.json), with [profiles.example.json](/Users/jconner/projects/sql-tshoot-mcp/profiles.example.json) as a reference copy.
+For multi-target launches through Codex, you can define named profiles in a JSON file. The repo now includes a local starter file at [profiles.json](/C:/Projects/sql-tshooter/profiles.json), with [profiles.example.json](/C:/Projects/sql-tshooter/profiles.example.json) as a reference copy.
+
+For Windows SQL-auth profiles, store `username` plus `credentialRef` in JSON and save the actual password into Windows Credential Manager. Plaintext `password` entries in `profiles.json` are rejected.
 
 ## Install
 
@@ -117,7 +119,7 @@ python -m pip install -e .[dev]
 
 ## Desktop GUI
 
-The repository now includes a standalone desktop shell in [desktop/package.json](/Users/jconner/projects/sql-tshoot-mcp/desktop/package.json:1). This app does not embed Codex Desktop. It runs the local `codex` CLI in headless `app-server` mode and binds each GUI tab to one SQL TShooter target profile.
+The repository now includes a standalone desktop shell in [desktop/package.json](/C:/Projects/sql-tshooter/desktop/package.json:1). This app does not embed Codex Desktop. It runs the local `codex` CLI in headless `app-server` mode and binds each GUI tab to one SQL TShooter target profile.
 
 Current desktop prerequisites:
 

@@ -30,7 +30,12 @@ class Settings:
     max_logged_tool_output_chars: int = 12000
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        allow_missing_sql_password: bool = False,
+    ) -> "Settings":
         source = os.environ if env is None else env
         host = _require(source, "SQL_TSHOOTER_HOST")
         auth_mode = source.get("SQL_TSHOOTER_AUTH_MODE", "sql").strip().lower()
@@ -41,10 +46,13 @@ class Settings:
 
         username = _optional(source, "SQL_TSHOOTER_USERNAME")
         password = _optional(source, "SQL_TSHOOTER_PASSWORD")
-        if auth_mode == "sql" and (not username or not password):
+        if auth_mode == "sql" and not username:
             raise ConfigurationError(
-                "SQL authentication requires SQL_TSHOOTER_USERNAME and "
-                "SQL_TSHOOTER_PASSWORD."
+                "SQL authentication requires SQL_TSHOOTER_USERNAME."
+            )
+        if auth_mode == "sql" and not password and not allow_missing_sql_password:
+            raise ConfigurationError(
+                "SQL authentication requires SQL_TSHOOTER_PASSWORD."
             )
 
         return cls(

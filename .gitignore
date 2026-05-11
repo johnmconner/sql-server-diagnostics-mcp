@@ -16,6 +16,7 @@ pytest-cache-files-*/
 build/
 dist/
 logs/
+package-lock.json
 desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/

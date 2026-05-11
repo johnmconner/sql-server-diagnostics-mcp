@@ -1,0 +1,21 @@
+{
+  "profiles": [
+    {
+      "id": "prod-app",
+      "label": "Production App",
+      "host": "prod-sql-01.example.local",
+      "port": 1433,
+      "authMode": "sql",
+      "username": "readonly_user",
+      "password": "change-me",
+      "database": "AppDb",
+      "databases": ["AppDb", "ReportingDb"],
+      "driver": "ODBC Driver 18 for SQL Server",
+      "encrypt": true,
+      "trustServerCertificate": false,
+      "connectionTimeoutSeconds": 10,
+      "queryTimeoutSeconds": 30,
+      "maxLoggedToolOutputChars": 12000
+    }
+  ]
+}

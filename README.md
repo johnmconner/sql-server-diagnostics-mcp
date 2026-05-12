@@ -143,6 +143,36 @@ Useful environment overrides:
 - `SQL_TSHOOTER_PYTHON_COMMAND` to override Python resolution for the profiled MCP server
 - `CODEX_COMMAND` to override which `codex` executable the GUI launches
 
+Example Codex provider configuration for Azure Foundry / Azure OpenAI Responses-compatible endpoints:
+
+```toml
+model = "YOUR_MODEL_NAME"
+model_provider = "azure_foundry"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+
+[model_providers.azure_foundry]
+name = "Azure Foundry"
+base_url = "https://YOUR-RESOURCE-NAME.cognitiveservices.azure.com/openai"
+wire_api = "responses"
+query_params = { api-version = "YOUR_API_VERSION" }
+env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }
+```
+
+Set the API key in the environment before launching Codex or the desktop app:
+
+```powershell
+$env:AZURE_OPENAI_API_KEY = "YOUR_REAL_API_KEY"
+```
+
+Notes:
+
+- `base_url` should be the base `/openai` path, not a full `/responses?...` URL
+- `wire_api = "responses"` tells Codex to use the Responses API
+- `query_params` is where the Azure `api-version` goes
+- `env_http_headers` maps the HTTP header name to the environment variable name, not the literal secret value
+- if you set the variable after launching Codex or the desktop app, restart the process so it inherits the updated environment
+
 Desktop profile bootstrap behavior:
 
 - when running from this repo, the desktop app prefers `[repo]/profiles.json`
